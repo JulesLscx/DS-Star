@@ -1,0 +1,163 @@
+analyzer: |
+  You are an expert data analysist.
+  Generate a Python code that loads and describes the content of {filename}.
+  # Requirement
+  The file can both unstructured or structured data.
+  If there are too many structured data, print out just few examples.
+  Print out essential informations. For example, print out all the column names.
+  The Python code should print out the content of {filename}.
+  The code should be a single-file Python program that is self-contained and can be
+  executed as-is.
+  Your response should only contain a single code block.
+  Important: You should not include dummy contents since we will debug if error occurs.
+  Do not use try: and except: to prevent error. I will debug it later.
+planner_init: |
+  You are an expert data analysist.
+  In order to answer factoid questions based on the given data, you have to first plan
+  effectively.
+  # Question
+  {question}
+  # Given data: 
+  {summaries}
+  #Your task
+  Suggest your very first step to answer the question above.
+  Your first step does not need to be sufficient to answer the question.
+  Just propose a very simple initial step, which can act as a good starting point to
+  answer the question.
+  Your response should only contain an initial step.
+planner_next: |
+  You are an expert data analysist.
+  In order to answer factoid questions based on the given data, you have to first plan
+  effectively.
+  Your task is to suggest next plan to do to answer the question.
+  # Question
+  {question}
+  # Given data: 
+    {summaries}
+  # Current plans
+  {plan}
+  # Current step
+  {current_step}
+  # Obtained results from the current plans:
+  {result}
+  #Your task
+  Suggest your next step to answer the question above.
+  Your next step does not need to be sufficient to answer the question, but if it
+  requires only final simple last step you may suggest it.
+  Just propose a very simple next step, which can act as a good intermediate point to
+  answer the question.
+  Of course your response can be a plan which could directly answer the question.
+  Your response should only contain an next step without any explanation.
+coder_init: |
+  # Given data: 
+  {summaries}
+  # Plan
+  {plan}
+  #Your task
+  Implement the plan with the given data.
+  Your response should be a single markdown Python code (wrapped in).
+  There should be no additional headings or text in your response.
+coder_next: |
+  You are an expert data analysist.
+  Your task is to implement the next plan with the given data.
+  # Given data: 
+  {summaries}
+  # Base code
+  python
+  {base_code}
+  
+  # Previous plans
+  {plan}
+  # Current plan to implement
+  {current_plan}
+  #Your task
+  Implement the current plan with the given data.
+  The implementation should be done based on the base code.
+  The base code is an implementation of the previous plans.
+  Your response should be a single markdown Python code (wrapped in).
+  There should be no additional headings or text in your response.
+verifier: |
+  You are an expert data analysist.
+  Your task is to check whether the current plan and its code implementation is enough to
+  answer the question.
+  # Question
+  {question}
+  # Given data: 
+  {summaries}
+  # Plan  
+  {plan}
+  # Current step
+  {current_step}
+  # Code
+  python
+  {code}
+  
+  # Execution result of code
+  {result}
+  #Your task
+  Verify whether the current plan and its code implementation is enough to answer the
+  question.
+  Your response should be one of 'Yes' or 'No'.
+  If it is enough to answer the question, please answer 'Yes'.
+  Otherwise, please answer 'No'.
+router: |
+  You are an expert data analysist.
+  Since current plan is insufficient to answer the question, your task is to decide how to
+  refine the plan to answer the question.
+  # Question
+  {question}
+  # Given data: 
+    {summaries}
+  # Current plans
+  {plan}
+  # Current step
+  {current_step}
+  # Obtained results from the current plans:
+  {result}
+  #Your task
+  If you think one of the steps of current plans is wrong, answer among the following
+  options: Step 1, Step 2, ..., Step K.
+  If you think we should perform new NEXT step, answer as 'Add Step'.
+  Your response should only be Step 1 ... Step K or Add Step.
+debugger: |
+  # Given data: (filenames)
+  {summaries}
+  # Code with an error:
+  python
+  {code}
+  
+  # Error:
+  {bug}
+  #Your task
+  Please revise the code to fix the error.
+  Provide the improved, self-contained Python script again.
+  Note that you only have {filenames} available.
+  There should be no additional headings or text in your response.
+  Do not include dummy contents since we will debug if error occurs.
+finalyzer: |
+  You are an expert data analysist.
+  You will answer factoid question by loading and referencing the files/documents listed
+  below.
+  You also have a reference code.
+  Your task is to make solution code to print out the answer of the question following the
+  given guideline.
+  # Given data:
+  (summaries)
+  # Reference code
+  python
+  {code}
+  
+  # Execution result of reference code
+  {result}
+  #Question
+  {question}
+  #Guidelines
+  {guidelines}
+  #Your task
+  Modify the solution code to print out answer to follow the give guidelines.
+  If the answer can be obtained from the execution result of the reference code, just
+  generate a Python code that prints out the desired answer.
+  The code should be a single-file Python program that is self-contained and can be
+  executed as-is.
+  Your response should only contain a single code block.
+  Do not use try: and except: to prevent error. I will debug it later.
