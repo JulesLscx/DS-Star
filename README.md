@@ -1,6 +1,6 @@
 # DS-STAR: A Data Science Agentic Framework
 
-DS-STAR (Data Science - Structured Thought and Action) is a Python-based agentic framework for automating data science tasks. It leverages a multi-agent system powered by Google's Gemini models to analyze data, devise a plan, write and execute code, and iteratively refine the solution to answer a user's query.
+DS-STAR (Data Science - Structured Thought and Action) is a Python-based agentic framework for automating data science tasks. It leverages a multi-agent system powered by Large Language Models (Google's Gemini or OpenAI's GPT models) to analyze data, devise a plan, write and execute code, and iteratively refine the solution to answer a user's query.
 
 This project is an implementation of the paper from Google Research: [DS-STAR: A State-of-the-Art Versatile Data Science Agent](https://research.google/blog/ds-star-a-state-of-the-art-versatile-data-science-agent/). [Paper](https://arxiv.org/pdf/2509.21825)
 
@@ -46,7 +46,9 @@ All artifacts for each run are stored in the `runs/` directory, organized by `ru
 ### Prerequisites
 
 - Python 3.9+
-- An API key for Google's Gemini models.
+- An API key for either:
+  - Google's Gemini models (get one at https://makersuite.google.com/app/apikey)
+  - OpenAI models (get one at https://platform.openai.com/api-keys)
 
 ### Installation
 
@@ -66,18 +68,36 @@ All artifacts for each run are stored in the `runs/` directory, organized by `ru
 ### Configuration
 
 1.  **Set your API Key:**
-    The application requires a Gemini API key. You can set it as an environment variable:
+    The application requires an API key for either Gemini or OpenAI. You can set it as an environment variable:
+    
+    **For Gemini:**
     ```bash
-    export GEMINI_API_KEY='your-api-key'
+    export GEMINI_API_KEY='your-gemini-api-key'
     ```
+    
+    **For OpenAI:**
+    ```bash
+    export OPENAI_API_KEY='your-openai-api-key'
+    ```
+    
     Alternatively, you can add it to the `config.yaml` file.
 
 2.  **Customize `config.yaml`:**
     Create a `config.yaml` file in the root of the project and customize the settings. See the "Configuration" section below for details.
 
+    **For Gemini models:**
     ```yaml
     # config.yaml
-    model_name: 'gemini-1.5-flash'
+    model_name: 'gemini-1.5-flash'  # or gemini-1.5-pro, gemini-2.5-flash
+    max_refinement_rounds: 5
+    interactive: false
+    # api_key: 'your-api-key' # Alternatively, place it here
+    ```
+    
+    **For OpenAI models:**
+    ```yaml
+    # config.yaml
+    model_name: 'gpt-4'  # or gpt-4-turbo, gpt-3.5-turbo, o1-preview, o1-mini
     max_refinement_rounds: 5
     interactive: false
     # api_key: 'your-api-key' # Alternatively, place it here
@@ -126,8 +146,11 @@ The following options are available in `config.yaml` and can be overridden by CL
 
 - `run_id` (string): The ID of a run to resume.
 - `max_refinement_rounds` (int): The maximum number of times the agent will try to refine its plan.
-- `api_key` (string): Your Gemini API key.
-- `model_name` (string): The Gemini model to use (e.g., `gemini-1.5-flash`).
+- `api_key` (string): Your API key for the chosen provider (Gemini or OpenAI).
+- `model_name` (string): The model to use:
+  - **Gemini models**: `gemini-1.5-flash`, `gemini-1.5-pro`, `gemini-2.5-flash`
+  - **OpenAI models**: `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo`, `o1-preview`, `o1-mini`
+- `provider` (string): The LLM provider to use (`'openai'` or `'gemini'`). Auto-detected from `model_name` if not specified.
 - `interactive` (bool): If true, waits for user input before executing each step.
 - `auto_debug` (bool): If true, the `Debugger` agent will automatically try to fix failing code.
 - `execution_timeout` (int): Timeout in seconds for code execution.

@@ -8,9 +8,10 @@ from pathlib import Path
 import sys
 import atexit
 import yaml
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime
 import google.generativeai as genai
+from openai import OpenAI
 
 # =============================================================================
 # CONFIGURATION & PROMPT TEMPLATES
@@ -26,6 +27,7 @@ class DSConfig:
     max_refinement_rounds: int = 5
     api_key: Optional[str] = None
     model_name: str = 'gemini-2.5-flash'
+    provider: Optional[str] = None  # 'openai' or 'gemini', auto-detected if None
     interactive: bool = False
     auto_debug: bool = True
     execution_timeout: int = 60
@@ -37,8 +39,23 @@ class DSConfig:
     def __post_init__(self):
         if self.run_id is None:
             self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{uuid.uuid4().hex[:6]}"
+        
+        # Auto-detect provider from model name if not specified
+        if self.provider is None:
+            if any(x in self.model_name.lower() for x in ['gpt', 'o1', 'o3']):
+                self.provider = 'openai'
+            elif any(x in self.model_name.lower() for x in ['gemini', 'bison', 'palm']):
+                self.provider = 'gemini'
+            else:
+                # Default to gemini for backward compatibility
+                self.provider = 'gemini'
+        
+        # Get API key from environment if not provided
         if self.api_key is None:
-            self.api_key = os.environ.get("GEMINI_API_KEY")
+            if self.provider == 'openai':
+                self.api_key = os.environ.get("OPENAI_API_KEY")
+            else:
+                self.api_key = os.environ.get("GEMINI_API_KEY")
 
 
 
@@ -234,11 +251,20 @@ class DS_STAR_Agent:
         self.config = config
         self.storage = ArtifactStorage(config)
         self.controller = PipelineController(config, self.storage, self)
-        if config.api_key:
+        
+        # Initialize the appropriate API client
+        if not config.api_key:
+            raise ValueError(f"{config.provider.upper()}_API_KEY must be set in environment or config.")
+        
+        if config.provider == 'openai':
+            self.openai_client = OpenAI(api_key=config.api_key)
+            self.gemini_model = None
+        elif config.provider == 'gemini':
             genai.configure(api_key=config.api_key)
+            self.gemini_model = genai.GenerativeModel(config.model_name)
+            self.openai_client = None
         else:
-            raise ValueError("GEMINI_API_KEY must be set in environment or config.")
-        self.model = genai.GenerativeModel(config.model_name)
+            raise ValueError(f"Unsupported provider: {config.provider}. Must be 'openai' or 'gemini'.")
         
         # Setup execution environment
         self.exec_dir = Path(config.runs_dir) / config.run_id / "exec_env"
@@ -273,15 +299,29 @@ class DS_STAR_Agent:
         
         atexit.register(lambda: self.log_file.close())
     
-    def _call_gemini(self, agent_name: str, prompt: str) -> str:
-        """Call Gemini API with logging."""
+    def _call_llm(self, agent_name: str, prompt: str) -> str:
+        """Call LLM API (OpenAI or Gemini) with logging."""
         try:
-            response = self.model.generate_content(prompt)
-            response_text = response.text
+            if self.config.provider == 'openai':
+                response = self.openai_client.chat.completions.create(
+                    model=self.config.model_name,
+                    messages=[
+                        {"role": "system", "content": "You are an expert data analyst and Python programmer."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.7
+                )
+                response_text = response.choices[0].message.content
+            elif self.config.provider == 'gemini':
+                response = self.gemini_model.generate_content(prompt)
+                response_text = response.text
+            else:
+                raise ValueError(f"Unsupported provider: {self.config.provider}")
+            
             self.controller.logger.info(f"[{agent_name}] Response received ({len(response_text)} chars)")
             return response_text
         except Exception as e:
-            error_msg = f"Error calling Gemini API: {str(e)}"
+            error_msg = f"Error calling {self.config.provider.upper()} API: {str(e)}"
             self.controller.logger.error(error_msg)
             raise
     
@@ -341,7 +381,7 @@ class DS_STAR_Agent:
         
         result = self.controller.execute_step(
             "analyzer",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("ANALYZER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("ANALYZER", prompt),
             prompt=prompt,
             filename=filename
         )
@@ -370,7 +410,7 @@ class DS_STAR_Agent:
         
         return self.controller.execute_step(
             step_type,
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("PLANNER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("PLANNER", prompt),
             prompt=prompt,
             query=query,
             plan_length=len(current_plan)
@@ -391,7 +431,7 @@ class DS_STAR_Agent:
         
         result = self.controller.execute_step(
             "coder",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("CODER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("CODER", prompt),
             prompt=prompt,
             plan_length=len(plan),
             has_base_code=base_code is not None
@@ -407,7 +447,7 @@ class DS_STAR_Agent:
         
         return self.controller.execute_step(
             "verifier",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("VERIFIER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("VERIFIER", prompt),
             prompt=prompt,
             plan_length=len(plan)
         ).strip()
@@ -421,7 +461,7 @@ class DS_STAR_Agent:
         
         return self.controller.execute_step(
             "router",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("ROUTER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("ROUTER", prompt),
             prompt=prompt,
             plan_length=len(plan)
         ).strip()
@@ -434,7 +474,7 @@ class DS_STAR_Agent:
         
         result = self.controller.execute_step(
             "debugger",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("DEBUGGER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("DEBUGGER", prompt),
             prompt=prompt,
             error_type=error.split(":")[0]
         )
@@ -450,7 +490,7 @@ class DS_STAR_Agent:
         
         result = self.controller.execute_step(
             "finalyzer",
-            step_func=lambda prompt=prompt, **kwargs: self._call_gemini("FINALYZER", prompt),  # FIXED
+            step_func=lambda prompt=prompt, **kwargs: self._call_llm("FINALYZER", prompt),
             prompt=prompt
         )
         

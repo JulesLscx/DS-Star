@@ -1,6 +1,15 @@
 # config.yaml
 run_id: "experiment_name"
+
+# Model Configuration
+# For Gemini models: gemini-1.5-flash, gemini-1.5-pro, gemini-2.5-flash
+# For OpenAI models: gpt-4, gpt-4-turbo, gpt-3.5-turbo, o1-preview, o1-mini
 model_name: "gemini-2.5-flash"
+
+# Provider: 'openai' or 'gemini' (auto-detected from model_name if not specified)
+# provider: "gemini"  # Uncomment to explicitly set provider
+
+# Pipeline Settings
 interactive: false
 max_refinement_rounds: 3
 preserve_artifacts: true
