@@ -6,7 +6,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
-    { name = "Nicolas Perez", email = "nicolasperez@example.com" }
+    {name = "Jules Lascoux", email="jlslascoux@gmail.com"}
+    { name = "Nicolas Perez"}
 ]
 keywords = ["data-science", "ai", "agents", "gemini", "automation"]
 classifiers = [
@@ -27,16 +28,19 @@ dependencies = [
     "PyYAML>=6.0",
     "tqdm>=4.67.0",
     "requests>=2.32.0",
+    "openai>=2.8.1",
+    "pandas>=2.3.3",
+    "openpyxl>=3.1.5",
 ]
 
 [project.scripts]
 dsstar = "dsstar:main"
 
 [project.urls]
-Homepage = "https://github.com/nicolasperez/DS-Star"
-Repository = "https://github.com/nicolasperez/DS-Star"
-Documentation = "https://github.com/nicolasperez/DS-Star#readme"
-"Bug Tracker" = "https://github.com/nicolasperez/DS-Star/issues"
+Homepage = "https://github.com/JulesLscx/DS-Star"
+Repository ="https://github.com/JulesLscx/DS-Star"
+Documentation = "https://github.com/JulesLscx/DS-Star#readme"
+"Bug Tracker" = "https://github.com/JulesLscx/DS-Star/issues"
 
 [build-system]
 requires = ["hatchling"]

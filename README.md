@@ -89,6 +89,12 @@ All artifacts for each run are stored in the `runs/` directory, organized by `ru
     max_refinement_rounds: 5
     interactive: false
     # api_key: 'your-api-key' # Alternatively, place it here
+    
+    # Optional: Configure specific models for different agents
+    agent_models:
+      PLANNER: 'gpt-4'
+      CODER: 'gemini-1.5-pro'
+      VERIFIER: 'gemini-1.5-flash'
     ```
 
 ## Usage
@@ -160,7 +166,9 @@ The following options are available in `config.yaml` and can be overridden by CL
 - `interactive` (bool): If true, waits for user input before executing each step.
 - `auto_debug` (bool): If true, the `Debugger` agent will automatically try to fix failing code.
 - `execution_timeout` (int): Timeout in seconds for code execution.
+- `execution_timeout` (int): Timeout in seconds for code execution.
 - `preserve_artifacts` (bool): If true, all step artifacts are saved to the `runs` directory.
+- `agent_models` (dict): A dictionary mapping agent names (e.g., `PLANNER`, `CODER`) to specific model names. If not specified, `model_name` is used.
 
 ## Contributing
 
