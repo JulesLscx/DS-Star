@@ -28,6 +28,8 @@ class DSConfig:
     model_name: str = 'gemini-2.5-flash'
     interactive: bool = False
     auto_debug: bool = True
+    # debug attempts defaults to inf for backwards compatibility
+    debug_attempts: float = float('inf')
     execution_timeout: int = 60
     preserve_artifacts: bool = True
     runs_dir: str = "runs"
@@ -73,7 +75,7 @@ class ArtifactStorage:
     def save_step(self, step_id: str, step_type: str, prompt: str, 
                   code: Optional[str], result: str, metadata: Dict[str, Any]):
         """Save all artifacts for a single pipeline step."""
-        step_dir = self.run_dir / "steps" / f"{step_id}_{step_type}"
+        step_dir = self.run_dir / "steps" / step_id
         step_dir.mkdir(exist_ok=True)
         
         # Save prompt
@@ -375,6 +377,20 @@ class DS_STAR_Agent:
         except Exception as e:
             return "", f"Execution error: {str(e)}"
 
+    def _execute_and_debug_code(self, code: str, data_files: List[str], data_desc: str) -> str:
+        exec_result, error = self._execute_code(code, data_files)
+
+        # Debug loop
+        attempts = 0
+        while error and self.config.auto_debug and attempts < self.config.debug_attempts:
+            self.controller.logger.warning("Debugging...")
+            code = self._debug_code(code, error, data_desc, data_files)
+            exec_result, error = self._execute_code(code, data_files)
+
+        if error:
+            self.controller.logger.fatal(f"Execution error: {error}")
+        return exec_result
+
 
     def analyze_data(self, filename: str) -> Dict[str, str]:
         prompt = PROMPT_TEMPLATES["analyzer"].format(filename=filename)
@@ -387,12 +403,7 @@ class DS_STAR_Agent:
         )
         
         code = self._extract_code_block(result)
-        exec_result, error = self._execute_code(code, [filename])
-        
-        if error:
-            self.controller.logger.warning(f"Analysis failed: {error}")
-            self._create_fallback_file(filename)
-            exec_result = f"Created fallback for {filename}"
+        exec_result = self._execute_and_debug_code(code, [filename], data_desc="")
         
         return {"code": code, "result": exec_result, "filename": filename}
 
@@ -466,7 +477,7 @@ class DS_STAR_Agent:
             plan_length=len(plan)
         ).strip()
 
-    def debug_code(self, code: str, error: str, data_desc: str, filenames: List[str]) -> str:
+    def _debug_code(self, code: str, error: str, data_desc: str, filenames: List[str]) -> str:
         prompt = PROMPT_TEMPLATES["debugger"].format(
             summaries=data_desc, code=code,
             bug=error, filenames=", ".join(filenames)
@@ -495,6 +506,7 @@ class DS_STAR_Agent:
         )
         
         return self._extract_code_block(result)
+
     def run_pipeline(self, query: str, data_files: List[str]) -> Dict[str, Any]:
         """Main pipeline with full persistence and resume capability."""
         self.controller.logger.info(f"Starting pipeline: {self.config.run_id}")
@@ -542,13 +554,7 @@ class DS_STAR_Agent:
             plan.append(self.plan_next_step(query, data_desc_str, plan, ""))
             
             code = self.generate_code(plan, data_desc_str)
-            exec_result, error = self._execute_code(code, absolute_data_files)
-            
-            # Debug loop
-            while error and self.config.auto_debug:
-                self.controller.logger.warning("Debugging...")
-                code = self.debug_code(code, error, data_desc_str, absolute_data_files)
-                exec_result, error = self._execute_code(code, absolute_data_files)
+            exec_result = self._execute_and_debug_code(code, absolute_data_files, data_desc_str)
             
             # Refinement rounds
             for round_idx in range(self.config.max_refinement_rounds):
@@ -579,11 +585,7 @@ class DS_STAR_Agent:
                 
                 # Generate and execute new code
                 code = self.generate_code(plan, data_desc_str, base_code=code)
-                exec_result, error = self._execute_code(code, absolute_data_files)
-                
-                while error and self.config.auto_debug:
-                    code = self.debug_code(code, error, data_desc_str, absolute_data_files)
-                    exec_result, error = self._execute_code(code, absolute_data_files)
+                exec_result = self._execute_and_debug_code(code, absolute_data_files, data_desc_str)
             else:
                 self.controller.logger.warning("Max refinement rounds reached")
         
@@ -614,7 +616,7 @@ class DS_STAR_Agent:
             data_desc_str
         )
         
-        final_result, _ = self._execute_code(final_code, absolute_data_files)
+        final_result = self._execute_and_debug_code(final_code, absolute_data_files, data_desc_str)
         
         # Save final output
         output_file = self.storage.run_dir / "final_output" / "result.json"
@@ -636,13 +638,6 @@ def main():
     """CLI interface with resume and edit capabilities."""
     import argparse
     
-    # Load config from file to set defaults
-    try:
-        with open("config.yaml", 'r') as f:
-            config_defaults = yaml.safe_load(f) or {}
-    except FileNotFoundError:
-        config_defaults = {}
-
     parser = argparse.ArgumentParser(description="DS-STAR Data Science Agent")
     parser.add_argument("--resume", type=str, help="Resume from run ID")
     parser.add_argument("--interactive", action="store_true", help="Pause between steps")
@@ -650,8 +645,15 @@ def main():
     parser.add_argument("--data-files", nargs="+", help="Data files to analyze")
     parser.add_argument("--query", type=str, help="Analysis query")
     parser.add_argument("--max-rounds", type=int, help="Max refinement rounds")
-    
+    parser.add_argument("--config", type=str, help="Path to config file", default="config.yaml")
     args = parser.parse_args()
+
+    # Load config from file to set defaults
+    try:
+        with open(args.config, 'r') as f:
+            config_defaults = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        config_defaults = {}
     
     # Combine config sources (CLI args take precedence)
     config_params = {
@@ -675,11 +677,14 @@ def main():
         return
 
     # Check for required arguments for a new run
-    if not (args.data_files and args.query):
+    query = args.query or config_defaults.get('query')
+    data_files = args.data_files or config_defaults.get('data_files')
+
+    if not (data_files and query):
         parser.error("--data-files and --query are required for a new run.")
 
     # Run pipeline
-    result = agent.run_pipeline(args.query, args.data_files)
+    result = agent.run_pipeline(query, data_files)
     print(f"\n{'='*60}")
     print(f"RUN COMPLETED: {result['run_id']}")
     print(f"OUTPUT: {result['output_file']}")
