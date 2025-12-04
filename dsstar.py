@@ -10,7 +10,7 @@ import atexit
 import yaml
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from provider import ModelProvider, GeminiProvider, OpenAIProvider
+from provider import ModelProvider, GeminiProvider, OllamaProvider, OpenAIProvider
 
 # =============================================================================
 # CONFIGURATION & PROMPT TEMPLATES
@@ -245,42 +245,16 @@ class DS_STAR_Agent:
         agents = ["ANALYZER", "PLANNER", "CODER", "VERIFIER", "ROUTER", "DEBUGGER", "FINALYZER"]
         
         def get_provider_for_model(model_name: str, config: DSConfig) -> ModelProvider:
-            if model_name.startswith("gpt") or model_name.startswith("o1"):
-                provider_cls = OpenAIProvider
-            else:
-                provider_cls = GeminiProvider
+            provider_cls = None
+            for provider in [OllamaProvider, OpenAIProvider, GeminiProvider]:
+                if provider.provider_instance(model_name):
+                    provider_cls = provider
+                    break
+
+            if not provider_cls:
+                raise ValueError(f"No provider found for model {model_name}")
             
-            # Get API key
-            # We check config first, then env var defined by the provider
-            # Note: We instantiate a dummy to get the env var name, or make it static.
-            # Since it's a property on instance in our design, we might need to change design or instantiate dummy.
-            # For now, let's just check the env var directly based on class.
-            
-            # Better approach: Pass the key if available in config, else let provider handle it or check env here.
-            # But config.api_key is currently a single field.
-            # If we have multiple providers, we might need multiple keys.
-            # For backward compatibility, config.api_key is likely the Gemini key or the "primary" key.
-            
-            # Let's assume config.api_key is for the default provider if it matches, otherwise check env.
-            
-            dummy = provider_cls(api_key="dummy", model_name="dummy")
-            env_var = dummy.env_var_name
-            
-            api_key = os.environ.get(env_var)
-            if config.api_key and provider_cls == GeminiProvider: # Assume config.api_key is for Gemini if not specified otherwise
-                 api_key = config.api_key
-            
-            # If we still don't have a key, and it's OpenAI, maybe config.api_key was meant for it?
-            # This is ambiguous. Let's rely on Env Vars for non-default providers if config.api_key is taken.
-            
-            if not api_key:
-                 # Fallback: if config.api_key is set, try using it (user might have set it for OpenAI)
-                 if config.api_key:
-                     api_key = config.api_key
-                 else:
-                     raise ValueError(f"{env_var} must be set for model {model_name}")
-            
-            return provider_cls(api_key, model_name)
+            return provider_cls(config.api_key, model_name)
 
         for agent in agents:
             model_name = config.agent_models.get(agent, default_model)
