@@ -10,7 +10,7 @@ import atexit
 import yaml
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from provider import ModelProvider, GeminiProvider, OpenAIProvider
+from provider import ModelProvider, GeminiProvider, OllamaProvider, OpenAIProvider
 
 # =============================================================================
 # CONFIGURATION & PROMPT TEMPLATES
@@ -25,9 +25,11 @@ class DSConfig:
     run_id: str = None
     max_refinement_rounds: int = 5
     api_key: Optional[str] = None
-    model_name: str = 'gemini-2.5-flash'
+    model_name: str = None
     interactive: bool = False
     auto_debug: bool = True
+    # debug attempts defaults to inf for backwards compatibility
+    debug_attempts: float = float('inf')
     execution_timeout: int = 60
     preserve_artifacts: bool = True
     runs_dir: str = "runs"
@@ -38,8 +40,6 @@ class DSConfig:
     def __post_init__(self):
         if self.run_id is None:
             self.run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{uuid.uuid4().hex[:6]}"
-        if self.api_key is None:
-            self.api_key = os.environ.get("GEMINI_API_KEY")
         if self.agent_models is None:
             self.agent_models = {}
 
@@ -73,7 +73,7 @@ class ArtifactStorage:
     def save_step(self, step_id: str, step_type: str, prompt: str, 
                   code: Optional[str], result: str, metadata: Dict[str, Any]):
         """Save all artifacts for a single pipeline step."""
-        step_dir = self.run_dir / "steps" / f"{step_id}_{step_type}"
+        step_dir = self.run_dir / "steps" / step_id
         step_dir.mkdir(exist_ok=True)
         
         # Save prompt
@@ -245,42 +245,16 @@ class DS_STAR_Agent:
         agents = ["ANALYZER", "PLANNER", "CODER", "VERIFIER", "ROUTER", "DEBUGGER", "FINALYZER"]
         
         def get_provider_for_model(model_name: str, config: DSConfig) -> ModelProvider:
-            if model_name.startswith("gpt") or model_name.startswith("o1"):
-                provider_cls = OpenAIProvider
-            else:
-                provider_cls = GeminiProvider
+            provider_cls = None
+            for provider in [OllamaProvider, OpenAIProvider, GeminiProvider]:
+                if provider.provider_instance(model_name):
+                    provider_cls = provider
+                    break
+
+            if not provider_cls:
+                raise ValueError(f"No provider found for model {model_name}")
             
-            # Get API key
-            # We check config first, then env var defined by the provider
-            # Note: We instantiate a dummy to get the env var name, or make it static.
-            # Since it's a property on instance in our design, we might need to change design or instantiate dummy.
-            # For now, let's just check the env var directly based on class.
-            
-            # Better approach: Pass the key if available in config, else let provider handle it or check env here.
-            # But config.api_key is currently a single field.
-            # If we have multiple providers, we might need multiple keys.
-            # For backward compatibility, config.api_key is likely the Gemini key or the "primary" key.
-            
-            # Let's assume config.api_key is for the default provider if it matches, otherwise check env.
-            
-            dummy = provider_cls(api_key="dummy", model_name="dummy")
-            env_var = dummy.env_var_name
-            
-            api_key = os.environ.get(env_var)
-            if config.api_key and provider_cls == GeminiProvider: # Assume config.api_key is for Gemini if not specified otherwise
-                 api_key = config.api_key
-            
-            # If we still don't have a key, and it's OpenAI, maybe config.api_key was meant for it?
-            # This is ambiguous. Let's rely on Env Vars for non-default providers if config.api_key is taken.
-            
-            if not api_key:
-                 # Fallback: if config.api_key is set, try using it (user might have set it for OpenAI)
-                 if config.api_key:
-                     api_key = config.api_key
-                 else:
-                     raise ValueError(f"{env_var} must be set for model {model_name}")
-            
-            return provider_cls(api_key, model_name)
+            return provider_cls(config.api_key, model_name)
 
         for agent in agents:
             model_name = config.agent_models.get(agent, default_model)
@@ -323,26 +297,7 @@ class DS_STAR_Agent:
     def _call_model(self, agent_name: str, prompt: str) -> str:
         """Call the appropriate model provider for the agent."""
         try:
-            provider = self.providers.get(agent_name)
-            if not provider:
-                # Fallback to default if agent name not found
-                default_model = self.config.model_name
-                # Re-use the logic to get provider
-                # For simplicity, just assume Gemini fallback for now or duplicate logic?
-                # Let's duplicate for safety but ideally refactor.
-                if default_model.startswith("gpt") or default_model.startswith("o1"):
-                    provider_cls = OpenAIProvider
-                else:
-                    provider_cls = GeminiProvider
-                
-                dummy = provider_cls(api_key="dummy", model_name="dummy")
-                env_var = dummy.env_var_name
-                api_key = self.config.api_key or os.environ.get(env_var)
-                
-                if not api_key:
-                     raise ValueError(f"API Key not found for fallback provider ({env_var}).")
-                provider = provider_cls(api_key, default_model)
-                
+            provider = self.providers[agent_name]
             response_text = provider.generate_content(prompt)
             self.controller.logger.info(f"[{agent_name}] Response received ({len(response_text)} chars)")
             return response_text
@@ -401,6 +356,21 @@ class DS_STAR_Agent:
         except Exception as e:
             return "", f"Execution error: {str(e)}"
 
+    def _execute_and_debug_code(self, code: str, data_files: List[str], data_desc: str) -> str:
+        exec_result, error = self._execute_code(code, data_files)
+
+        # Debug loop
+        attempts = 0
+        while error and self.config.auto_debug and attempts < self.config.debug_attempts:
+            self.controller.logger.warning("Debugging...")
+            code = self._debug_code(code, error, data_desc, data_files)
+            exec_result, error = self._execute_code(code, data_files)
+            attempts += 1
+
+        if error:
+            self.controller.logger.fatal(f"Execution error: {error}")
+        return exec_result
+
 
     def analyze_data(self, filename: str) -> Dict[str, str]:
         prompt = PROMPT_TEMPLATES["analyzer"].format(filename=filename)
@@ -413,12 +383,7 @@ class DS_STAR_Agent:
         )
         
         code = self._extract_code_block(result)
-        exec_result, error = self._execute_code(code, [filename])
-        
-        if error:
-            self.controller.logger.warning(f"Analysis failed: {error}")
-            self._create_fallback_file(filename)
-            exec_result = f"Created fallback for {filename}"
+        exec_result = self._execute_and_debug_code(code, [filename], data_desc="")
         
         return {"code": code, "result": exec_result, "filename": filename}
 
@@ -492,7 +457,7 @@ class DS_STAR_Agent:
             plan_length=len(plan)
         ).strip()
 
-    def debug_code(self, code: str, error: str, data_desc: str, filenames: List[str]) -> str:
+    def _debug_code(self, code: str, error: str, data_desc: str, filenames: List[str]) -> str:
         prompt = PROMPT_TEMPLATES["debugger"].format(
             summaries=data_desc, code=code,
             bug=error, filenames=", ".join(filenames)
@@ -521,6 +486,7 @@ class DS_STAR_Agent:
         )
         
         return self._extract_code_block(result)
+
     def run_pipeline(self, query: str, data_files: List[str]) -> Dict[str, Any]:
         """Main pipeline with full persistence and resume capability."""
         self.controller.logger.info(f"Starting pipeline: {self.config.run_id}")
@@ -568,13 +534,7 @@ class DS_STAR_Agent:
             plan.append(self.plan_next_step(query, data_desc_str, plan, ""))
             
             code = self.generate_code(plan, data_desc_str)
-            exec_result, error = self._execute_code(code, absolute_data_files)
-            
-            # Debug loop
-            while error and self.config.auto_debug:
-                self.controller.logger.warning("Debugging...")
-                code = self.debug_code(code, error, data_desc_str, absolute_data_files)
-                exec_result, error = self._execute_code(code, absolute_data_files)
+            exec_result = self._execute_and_debug_code(code, absolute_data_files, data_desc_str)
             
             # Refinement rounds
             for round_idx in range(self.config.max_refinement_rounds):
@@ -582,7 +542,7 @@ class DS_STAR_Agent:
                 
                 verdict = self.verify_plan(plan, code, exec_result, query, data_desc_str)
                 
-                if verdict == "Sufficient":
+                if verdict.lower() == "yes":
                     self.controller.logger.info("Plan verified as sufficient!")
                     break
                 
@@ -605,11 +565,7 @@ class DS_STAR_Agent:
                 
                 # Generate and execute new code
                 code = self.generate_code(plan, data_desc_str, base_code=code)
-                exec_result, error = self._execute_code(code, absolute_data_files)
-                
-                while error and self.config.auto_debug:
-                    code = self.debug_code(code, error, data_desc_str, absolute_data_files)
-                    exec_result, error = self._execute_code(code, absolute_data_files)
+                exec_result = self._execute_and_debug_code(code, absolute_data_files, data_desc_str)
             else:
                 self.controller.logger.warning("Max refinement rounds reached")
         
@@ -640,7 +596,7 @@ class DS_STAR_Agent:
             data_desc_str
         )
         
-        final_result, _ = self._execute_code(final_code, absolute_data_files)
+        final_result = self._execute_and_debug_code(final_code, absolute_data_files, data_desc_str)
         
         # Save final output
         output_file = self.storage.run_dir / "final_output" / "result.json"
@@ -662,13 +618,6 @@ def main():
     """CLI interface with resume and edit capabilities."""
     import argparse
     
-    # Load config from file to set defaults
-    try:
-        with open("config.yaml", 'r') as f:
-            config_defaults = yaml.safe_load(f) or {}
-    except FileNotFoundError:
-        config_defaults = {}
-
     parser = argparse.ArgumentParser(description="DS-STAR Data Science Agent")
     parser.add_argument("--resume", type=str, help="Resume from run ID")
     parser.add_argument("--interactive", action="store_true", help="Pause between steps")
@@ -676,15 +625,22 @@ def main():
     parser.add_argument("--data-files", nargs="+", help="Data files to analyze")
     parser.add_argument("--query", type=str, help="Analysis query")
     parser.add_argument("--max-rounds", type=int, help="Max refinement rounds")
-    
+    parser.add_argument("--config", type=str, help="Path to config file", default="config.yaml")
     args = parser.parse_args()
+
+    # Load config from file to set defaults
+    try:
+        with open(args.config, 'r') as f:
+            config_defaults = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        config_defaults = {}
     
     # Combine config sources (CLI args take precedence)
     config_params = {
         'run_id': args.resume or config_defaults.get('run_id'),
         'interactive': args.interactive or config_defaults.get('interactive', False),
         'max_refinement_rounds': args.max_rounds or config_defaults.get('max_refinement_rounds', 5),
-        'model_name': config_defaults.get('model_name', 'gemini-1.5-flash'),
+        'model_name': config_defaults.get('model_name'),
         'preserve_artifacts': config_defaults.get('preserve_artifacts', True)
     }
     
@@ -692,6 +648,8 @@ def main():
     config_params = {k: v for k, v in config_params.items() if v is not None}
     
     config = DSConfig(**config_params)
+    if not config.model_name:
+        parser.error("Model name must be specified via config file.")
     
     agent = DS_STAR_Agent(config)
     
@@ -701,11 +659,14 @@ def main():
         return
 
     # Check for required arguments for a new run
-    if not (args.data_files and args.query):
+    query = args.query or config_defaults.get('query')
+    data_files = args.data_files or config_defaults.get('data_files')
+
+    if not (data_files and query):
         parser.error("--data-files and --query are required for a new run.")
 
     # Run pipeline
-    result = agent.run_pipeline(args.query, args.data_files)
+    result = agent.run_pipeline(query, data_files)
     print(f"\n{'='*60}")
     print(f"RUN COMPLETED: {result['run_id']}")
     print(f"OUTPUT: {result['output_file']}")

@@ -100,6 +100,7 @@ verifier: |
   Your response should be one of 'Yes' or 'No'.
   If it is enough to answer the question, please answer 'Yes'.
   Otherwise, please answer 'No'.
+  Your answer (Yes/No): 
 router: |
   You are an expert data analysist.
   Since current plan is insufficient to answer the question, your task is to decide how to
